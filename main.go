@@ -86,7 +86,7 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fmt.Printf("Received Message:\n\ttype:\t%v\n\tcontent:\t%v\n\n", mt, data)
+		log.Printf("Received Message:\n\ttype:\t%v\n\tcontent:\t%v\n\n", mt, data)
 
 		// Parse data to json []byte then send to active sockets/connections
 		if message, err := json.Marshal(data); err != nil {
@@ -101,9 +101,10 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 func broadcastMessage(message []byte) {
 	var wg sync.WaitGroup
 	logChan := make(chan string)
+	successAttemptCounter := 0
 
 	// logging successful sent message attempt, receive log data from channel logChan
-	go logSentMessages(logChan)
+	go logSentMessages(logChan, &successAttemptCounter)
 
 	for conn := range activeConnections {
 		// using waitgroup so upon broadcasted message to all active connections, is logged correctly
@@ -120,7 +121,7 @@ func broadcastMessage(message []byte) {
 	close(logChan)
 
 	// log all attempts are done
-	log.Println("Done sending attempt to all active connections")
+	log.Printf("Done sending attempt to all active connections\nSent\t: %d\nFail\t: %d", successAttemptCounter, len(activeConnections)-successAttemptCounter)
 }
 
 func attemptWriteMessage(message []byte, conn *websocket.Conn, wg *sync.WaitGroup, logChan chan<- string) {
@@ -134,8 +135,9 @@ func attemptWriteMessage(message []byte, conn *websocket.Conn, wg *sync.WaitGrou
 	wg.Done()
 }
 
-func logSentMessages(logChan <-chan string) {
+func logSentMessages(logChan <-chan string, counter *int) {
 	for logCh := range logChan {
+		*counter = *counter + 1
 		log.Println(logCh)
 	}
 }
