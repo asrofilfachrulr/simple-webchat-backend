@@ -80,7 +80,7 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 			Content string `json:"content"`
 		}{}
 
-		// parse to predefined struct
+		// parse incoming message to predefined struct
 		if err := json.Unmarshal(p, &data); err != nil {
 			log.Fatalln(err.Error())
 			return
@@ -88,10 +88,11 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 
 		fmt.Printf("Received Message:\n\ttype:\t%v\n\tcontent:\t%v\n\n", mt, data)
 
-		// Parse back to []byte then send to active sockets/connections
+		// Parse data to json []byte then send to active sockets/connections
 		if message, err := json.Marshal(data); err != nil {
 			log.Fatalln(err.Error())
 		} else {
+			// broadcast message concurently
 			go broadcastMessage(message)
 		}
 	}
@@ -101,19 +102,24 @@ func broadcastMessage(message []byte) {
 	var wg sync.WaitGroup
 	logChan := make(chan string)
 
+	// logging successful sent message attempt, receive log data from channel logChan
 	go logSentMessages(logChan)
 
 	for conn := range activeConnections {
-		// using waitgroup to ensure broadcasted message to all active connections
+		// using waitgroup so upon broadcasted message to all active connections, is logged correctly
 		wg.Add(1)
 
-		// send to each connection concurently
+		// attempt to send message to a connection concurently
 		go attemptWriteMessage(message, conn, &wg, logChan)
 	}
 
+	// wait all attempt done
 	wg.Wait()
 
+	// close logging channel
 	close(logChan)
+
+	// log all attempts are done
 	log.Println("Done sending attempt to all active connections")
 }
 
