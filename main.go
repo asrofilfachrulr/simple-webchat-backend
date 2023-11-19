@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"runtime"
+	"sync"
+	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 )
 
@@ -13,21 +18,35 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
+var activeConnections = make(map[*websocket.Conn]bool)
+
 func checkOrigin(r *http.Request) bool {
 	return true
 }
 
 func main() {
-	http.HandleFunc("/ws", wsHanlder)
-	http.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+	runtime.GOMAXPROCS(2)
+
+	r := mux.NewRouter()
+
+	r.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("hello"))
 	})
+	r.HandleFunc("/ws", wsHanlder)
 
-	fmt.Println("Start server at :8080")
-	log.Fatalln(http.ListenAndServe(":8080", nil))
+	srv := &http.Server{
+		Handler:      r,
+		Addr:         "127.0.0.1:8080",
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
+
+	fmt.Println("Listening on :8080...")
+	log.Fatalln(srv.ListenAndServe())
 }
 
 func wsHanlder(w http.ResponseWriter, r *http.Request) {
+	// upgrading the protocol
 	upgrader.CheckOrigin = checkOrigin
 	conn, err := upgrader.Upgrade(w, r, nil)
 
@@ -36,8 +55,17 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defer conn.Close()
+	activeConnections[conn] = true
 
+	fmt.Printf("Updated Connections: %v\n", activeConnections)
+
+	defer func() {
+		conn.Close()
+		delete(activeConnections, conn)
+		fmt.Printf("Updated Connections: %v\n", activeConnections)
+	}()
+
+	// main loop to continously do socket listening
 	for {
 		mt, p, err := conn.ReadMessage()
 
@@ -46,6 +74,62 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		fmt.Printf("Received Message:\n\ttype:\t%v\n\tcontent:\t%s\n\n", mt, p)
+		// incoming data model
+		data := struct {
+			Name    string `json:"name"`
+			Content string `json:"content"`
+		}{}
+
+		// parse to predefined struct
+		if err := json.Unmarshal(p, &data); err != nil {
+			log.Fatalln(err.Error())
+			return
+		}
+
+		fmt.Printf("Received Message:\n\ttype:\t%v\n\tcontent:\t%v\n\n", mt, data)
+
+		// Parse back to []byte then send to active sockets/connections
+		if message, err := json.Marshal(data); err != nil {
+			log.Fatalln(err.Error())
+		} else {
+			go broadcastMessage(message)
+		}
+	}
+}
+
+func broadcastMessage(message []byte) {
+	var wg sync.WaitGroup
+	logChan := make(chan string)
+
+	go logSentMessages(logChan)
+
+	for conn := range activeConnections {
+		// using waitgroup to ensure broadcasted message to all active connections
+		wg.Add(1)
+
+		// send to each connection concurently
+		go attemptWriteMessage(message, conn, &wg, logChan)
+	}
+
+	wg.Wait()
+
+	close(logChan)
+	log.Println("Done sending attempt to all active connections")
+}
+
+func attemptWriteMessage(message []byte, conn *websocket.Conn, wg *sync.WaitGroup, logChan chan<- string) {
+	if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		log.Println(err.Error())
+	} else {
+		logChan <- fmt.Sprintf("Message sent to connection: %p", conn)
+	}
+
+	// done either success or fail
+	wg.Done()
+}
+
+func logSentMessages(logChan <-chan string) {
+	for logCh := range logChan {
+		log.Println(logCh)
 	}
 }
