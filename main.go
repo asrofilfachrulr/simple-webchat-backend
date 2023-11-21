@@ -55,6 +55,7 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// store connected client's connection
 	activeConnections[conn] = true
 
 	fmt.Printf("Updated Connections: %v\n", activeConnections)
@@ -88,7 +89,7 @@ func wsHanlder(w http.ResponseWriter, r *http.Request) {
 
 		log.Printf("Received Message:\n\ttype:\t%v\n\tcontent:\t%v\n\n", mt, data)
 
-		// Parse data to json []byte then send to active sockets/connections
+		// Parse data to json []byte then send to active connections / connected client
 		if message, err := json.Marshal(data); err != nil {
 			log.Fatalln(err.Error())
 		} else {
@@ -103,14 +104,14 @@ func broadcastMessage(message []byte) {
 	logChan := make(chan string)
 	successAttemptCounter := 0
 
-	// logging successful sent message attempt, receive log data from channel logChan
+	// log every successful sent message attempt, log data received from channel [logChan]
 	go logSentMessages(logChan, &successAttemptCounter)
 
 	for conn := range activeConnections {
 		// using waitgroup so upon broadcasted message to all active connections, is logged correctly
 		wg.Add(1)
 
-		// attempt to send message to a connection concurently
+		// attempt to send message to an active connection concurently
 		go attemptWriteMessage(message, conn, &wg, logChan)
 	}
 
